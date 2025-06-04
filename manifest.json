@@ -6,6 +6,8 @@
   "permissions": ["activeTab", "storage", "scripting"],
   "host_permissions": [
     "*://*.youtube.com/*",
+    "*://*.openai.com/*",
+    "*://chat.openai.com/*",
     "<all_urls>"
   ],
   "content_scripts": [

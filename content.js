@@ -1,6 +1,160 @@
 // Track website visit data
 let startTime = Date.now();
 let isStatsBubbleVisible = false;
+let retryCount = 0;
+const MAX_RETRIES = 5;
+let storageUpdateInterval;
+let lastStorageUpdate = Date.now();
+let containerFindAttempts = 0;
+const MAX_CONTAINER_FIND_ATTEMPTS = 10;
+
+// Function to check if we're on ChatGPT
+function isChatGPT() {
+  return (
+    window.location.hostname.includes("chat.openai.com") ||
+    window.location.hostname.includes("chatgpt.com")
+  );
+}
+
+// Function to check if we're on YouTube
+function isYouTube() {
+  return window.location.hostname.includes("youtube.com");
+}
+
+// Function to check if extension context is valid
+function isExtensionContextValid() {
+  try {
+    // Try to access chrome.runtime.id which throws if context is invalid
+    return Boolean(chrome.runtime && chrome.runtime.id);
+  } catch (e) {
+    return false;
+  }
+}
+
+// Function to safely find DOM elements
+function safeDOMQuery(selector, context = document) {
+  try {
+    return context.querySelector(selector);
+  } catch (e) {
+    console.warn(`Error finding element ${selector}:`, e);
+    return null;
+  }
+}
+
+// Function to find suitable container for ChatGPT with retry
+function findChatGPTContainer() {
+  if (containerFindAttempts >= MAX_CONTAINER_FIND_ATTEMPTS) {
+    console.warn("Max container find attempts reached, falling back to body");
+    return document.body;
+  }
+
+  try {
+    // Try different possible containers in order of preference
+    const containerSelectors = [
+      // ChatGPT main content area
+      "#__next > div > div.flex > div.flex",
+      // Main content
+      "main",
+      // Root app container
+      "#__next",
+      // Common div patterns in ChatGPT
+      ".flex-1.overflow-hidden",
+      ".flex.flex-1.flex-col",
+      // Fallback containers
+      "#root",
+      ".main-content",
+      "body",
+    ];
+
+    for (const selector of containerSelectors) {
+      const container = safeDOMQuery(selector);
+      if (container) {
+        // Verify the container is actually in the document
+        if (document.contains(container)) {
+          containerFindAttempts = 0; // Reset attempts on success
+          return container;
+        }
+      }
+    }
+
+    // If no suitable container found, increment attempts and try again
+    containerFindAttempts++;
+
+    if (containerFindAttempts < MAX_CONTAINER_FIND_ATTEMPTS) {
+      // Try again after a short delay
+      return new Promise((resolve) => {
+        setTimeout(() => {
+          resolve(findChatGPTContainer());
+        }, 500);
+      });
+    }
+
+    // Fallback to body if all attempts failed
+    console.warn("No suitable container found, falling back to body");
+    return document.body;
+  } catch (e) {
+    console.warn("Error finding container:", e);
+    return document.body;
+  }
+}
+
+// Function to safely execute chrome API calls with retry
+async function safeExecuteChromeAPI(operation, maxRetries = 3) {
+  let attempts = 0;
+
+  while (attempts < maxRetries) {
+    try {
+      if (!isExtensionContextValid()) {
+        console.warn("Extension context invalid, cleaning up...");
+        cleanupAndRemoveListeners();
+        return null;
+      }
+
+      return await operation();
+    } catch (error) {
+      attempts++;
+
+      if (error.message.includes("Extension context invalidated")) {
+        console.warn("Extension context invalidated, cleaning up...");
+        cleanupAndRemoveListeners();
+        return null;
+      }
+
+      if (attempts === maxRetries) {
+        throw error;
+      }
+
+      // Wait before retrying
+      await new Promise((resolve) => setTimeout(resolve, 1000 * attempts));
+    }
+  }
+}
+
+// Function to safely add elements to the DOM
+async function safelyAddElementToDOM(element, container) {
+  try {
+    if (!document.contains(container)) {
+      throw new Error("Container is not in document");
+    }
+
+    // Check if element is already in DOM
+    if (element.parentNode === container) {
+      return true;
+    }
+
+    // Remove element if it exists elsewhere in DOM
+    if (element.parentNode) {
+      element.parentNode.removeChild(element);
+    }
+
+    // Add element to container
+    container.appendChild(element);
+    return true;
+  } catch (e) {
+    console.warn("Error adding element to DOM:", e);
+    return false;
+  }
+}
 
 // Function to format time duration
 function formatDuration(ms) {
@@ -45,11 +199,16 @@ function getWebsiteMetadata() {
 }
 
 // Function to update storage with visit data
-async function updateVisitData() {
+async function updateVisitData(force = false) {
+  // Only update if forced or if it's been more than 5 seconds since last update
+  if (!force && Date.now() - lastStorageUpdate < 5000) {
+    return;
+  }
+
   const currentUrl = window.location.hostname;
   const metadata = getWebsiteMetadata();
 
-  try {
+  await safeExecuteChromeAPI(async () => {
     const data = await chrome.storage.local.get(currentUrl);
     const existingData = data[currentUrl] || {
       totalTime: 0,
@@ -68,9 +227,8 @@ async function updateVisitData() {
     };
 
     await chrome.storage.local.set(newData);
-  } catch (error) {
-    console.error("Error updating visit data:", error);
-  }
+    lastStorageUpdate = Date.now();
+  });
 }
 
 // Function to create stats bubble
@@ -96,7 +254,14 @@ function sortWebsitesByTime(sites) {
 // Function to update stats display
 async function updateStatsBubble(bubble) {
   try {
-    const data = await chrome.storage.local.get(null); // Get all stored data
+    const data = await safeExecuteChromeAPI(() =>
+      chrome.storage.local.get(null)
+    );
+    if (!data) {
+      bubble.innerHTML = "<h3>Statistics Unavailable</h3>";
+      return;
+    }
+
     const sortedSites = sortWebsitesByTime(data);
 
     let html = "<h3>All Websites Statistics</h3>";
@@ -127,100 +292,187 @@ async function updateStatsBubble(bubble) {
   }
 }
 
-// Function to add the emoji element
-function addFloatingEmoji() {
-  // Remove existing emoji if any
+// Function to cleanup intervals and listeners
+function cleanupAndRemoveListeners() {
+  if (storageUpdateInterval) {
+    clearInterval(storageUpdateInterval);
+  }
+
+  // Remove the observer if it exists
+  if (window.statsObserver) {
+    window.statsObserver.disconnect();
+  }
+
+  // Remove existing elements
   const existingEmoji = document.querySelector(".floating-emoji");
-  if (existingEmoji) {
-    existingEmoji.remove();
+  const existingBubble = document.querySelector(".stats-bubble");
+  if (existingEmoji) existingEmoji.remove();
+  if (existingBubble) existingBubble.remove();
+}
+
+// Function to add the emoji element with retry mechanism
+async function addFloatingEmoji() {
+  if (!isExtensionContextValid()) {
+    console.warn("Extension context invalid, not adding emoji");
+    return;
   }
 
-  // Create the floating emoji element
-  const floatingEmoji = document.createElement("div");
-  floatingEmoji.className = "floating-emoji";
-  floatingEmoji.innerHTML = "😊";
+  try {
+    // Remove existing elements
+    const existingEmoji = safeDOMQuery(".floating-emoji");
+    const existingBubble = safeDOMQuery(".stats-bubble");
+    if (existingEmoji) existingEmoji.remove();
+    if (existingBubble) existingBubble.remove();
 
-  // Create stats bubble
-  const statsBubble = createStatsBubble();
+    // Create new elements
+    const floatingEmoji = document.createElement("div");
+    floatingEmoji.className = "floating-emoji";
+    floatingEmoji.innerHTML = "😊";
 
-  // For YouTube, we need to append to a specific container
-  if (window.location.hostname.includes("youtube.com")) {
-    const targetNode = document.body;
-    if (targetNode) {
-      targetNode.appendChild(floatingEmoji);
-      targetNode.appendChild(statsBubble);
+    const statsBubble = createStatsBubble();
+
+    // Get appropriate container
+    let targetNode;
+    if (isChatGPT()) {
+      targetNode = await findChatGPTContainer();
+    } else {
+      targetNode = document.body;
     }
-  } else {
-    document.body.appendChild(floatingEmoji);
-    document.body.appendChild(statsBubble);
+
+    // Safely add elements to DOM
+    if (
+      !targetNode ||
+      !(await safelyAddElementToDOM(floatingEmoji, targetNode)) ||
+      !(await safelyAddElementToDOM(statsBubble, targetNode))
+    ) {
+      if (retryCount < MAX_RETRIES) {
+        retryCount++;
+        setTimeout(addFloatingEmoji, 1000);
+        return;
+      }
+      throw new Error("Failed to add elements to DOM");
+    }
+
+    // Reset retry count on success
+    retryCount = 0;
+
+    // Toggle border and stats state
+    let isBorderActive = false;
+
+    // Add click event listener
+    floatingEmoji.addEventListener("click", async (e) => {
+      e.stopPropagation(); // Prevent event bubbling
+
+      if (!isExtensionContextValid()) {
+        alert("Extension needs to be reloaded. Please refresh the page.");
+        return;
+      }
+
+      isBorderActive = !isBorderActive;
+      isStatsBubbleVisible = !isStatsBubbleVisible;
+
+      if (isBorderActive) {
+        if (isChatGPT()) {
+          const mainContent = await findChatGPTContainer();
+          if (mainContent) {
+            mainContent.style.border = "8px solid #4CAF50";
+          }
+        } else if (isYouTube()) {
+          document.documentElement.classList.add("webpage-border");
+          const app = document.querySelector("ytd-app");
+          if (app) {
+            app.style.border = "8px solid #4CAF50";
+          }
+        } else {
+          document.body.classList.add("webpage-border");
+        }
+      } else {
+        if (isChatGPT()) {
+          const mainContent = await findChatGPTContainer();
+          if (mainContent) {
+            mainContent.style.border = "none";
+          }
+        } else if (isYouTube()) {
+          document.documentElement.classList.remove("webpage-border");
+          const app = document.querySelector("ytd-app");
+          if (app) {
+            app.style.border = "none";
+          }
+        } else {
+          document.body.classList.remove("webpage-border");
+        }
+      }
+
+      // Toggle stats bubble
+      if (isStatsBubbleVisible) {
+        await updateStatsBubble(statsBubble);
+        statsBubble.classList.add("visible");
+      } else {
+        statsBubble.classList.remove("visible");
+      }
+    });
+
+    // Set up intervals
+    if (storageUpdateInterval) {
+      clearInterval(storageUpdateInterval);
+    }
+
+    storageUpdateInterval = setInterval(() => {
+      if (isExtensionContextValid()) {
+        updateVisitData();
+      } else {
+        cleanupAndRemoveListeners();
+      }
+    }, 30000);
+
+    // Update stats every minute if visible
+    setInterval(() => {
+      if (isStatsBubbleVisible && isExtensionContextValid()) {
+        updateStatsBubble(statsBubble);
+      }
+    }, 60000);
+  } catch (error) {
+    console.error("Error in addFloatingEmoji:", error);
+    if (retryCount < MAX_RETRIES) {
+      retryCount++;
+      setTimeout(addFloatingEmoji, 1000);
+    }
   }
-
-  // Toggle border and stats state
-  let isBorderActive = false;
-
-  // Add click event listener
-  floatingEmoji.addEventListener("click", async () => {
-    isBorderActive = !isBorderActive;
-    isStatsBubbleVisible = !isStatsBubbleVisible;
-
-    if (isBorderActive) {
-      if (window.location.hostname.includes("youtube.com")) {
-        document.documentElement.classList.add("webpage-border");
-        const app = document.querySelector("ytd-app");
-        if (app) {
-          app.style.border = "8px solid #4CAF50";
-        }
-      } else {
-        document.body.classList.add("webpage-border");
-      }
-    } else {
-      if (window.location.hostname.includes("youtube.com")) {
-        document.documentElement.classList.remove("webpage-border");
-        const app = document.querySelector("ytd-app");
-        if (app) {
-          app.style.border = "none";
-        }
-      } else {
-        document.body.classList.remove("webpage-border");
-      }
-    }
-
-    // Toggle stats bubble
-    if (isStatsBubbleVisible) {
-      await updateStatsBubble(statsBubble);
-      statsBubble.classList.add("visible");
-    } else {
-      statsBubble.classList.remove("visible");
-    }
-  });
-
-  // Update stats every minute
-  setInterval(() => {
-    if (isStatsBubbleVisible) {
-      updateStatsBubble(statsBubble);
-    }
-  }, 60000);
 }
 
 // Initial addition of emoji
 addFloatingEmoji();
 
-// Handle YouTube's dynamic navigation
-if (window.location.hostname.includes("youtube.com")) {
-  const observer = new MutationObserver((mutations) => {
-    for (const mutation of mutations) {
-      if (mutation.type === "childList") {
-        if (!document.querySelector(".floating-emoji")) {
-          addFloatingEmoji();
-        }
+// Create MutationObserver for dynamic content
+const observer = new MutationObserver((mutations) => {
+  if (!isExtensionContextValid()) {
+    cleanupAndRemoveListeners();
+    return;
+  }
+
+  for (const mutation of mutations) {
+    if (mutation.type === "childList") {
+      if (!document.querySelector(".floating-emoji")) {
+        addFloatingEmoji();
       }
     }
-  });
+  }
+});
 
-  observer.observe(document.body, { childList: true, subtree: true });
+// Store observer reference for cleanup
+window.statsObserver = observer;
+
+// Observe different parts of the page depending on the site
+if (isChatGPT() || isYouTube()) {
+  observer.observe(document.body, {
+    childList: true,
+    subtree: true,
+  });
 }
 
 // Update storage when leaving the page
 window.addEventListener("beforeunload", () => {
-  updateVisitData();
+  if (isExtensionContextValid()) {
+    updateVisitData(true);
+  }
 });
