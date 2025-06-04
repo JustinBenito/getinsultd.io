@@ -6,20 +6,35 @@ class TriggerDetector {
     this.scrollEvents = new Map();
     this.tabHistory = new Map();
     this.typeDeleteHistory = new Map();
-    this.hoverHistory = new Map();
-    this.tabSwitches = [];
     this.siteVisits = new Map();
     this.activeTabStartTime = Date.now();
-    this.lastProductiveTab = null;
+    this.lastActiveTime = this.activeTabStartTime;
+    this.lastTabTimestamp = Date.now();
     this.activeTriggers = new Set();
     this.callbacks = new Map();
 
+    console.log(
+      "TriggerDetector initialized, start time:",
+      this.activeTabStartTime
+    );
+
     // Initialize listeners
     this.initializeListeners();
+
+    // Start periodic checks
+    this.startPeriodicChecks();
+
+    // Set up tab change listener
+    if (chrome.tabs) {
+      chrome.tabs.onActivated.addListener(this.handleTabActivated.bind(this));
+      chrome.tabs.onUpdated.addListener(this.handleTabUpdated.bind(this));
+    }
   }
 
   // Initialize all event listeners
   initializeListeners() {
+    console.log("Setting up event listeners...");
+
     // Scroll detection
     document.addEventListener(
       "scroll",
@@ -32,12 +47,6 @@ class TriggerDetector {
       this.handleTabVisibility.bind(this)
     );
 
-    // Mouse hover detection
-    document.addEventListener(
-      "mouseover",
-      this.debounce(this.handleHover.bind(this), 100)
-    );
-
     // Typing detection
     document.addEventListener(
       "input",
@@ -46,6 +55,17 @@ class TriggerDetector {
 
     // Clean up old data periodically
     setInterval(this.cleanupOldData.bind(this), 60000);
+
+    // Set initial time if document is visible
+    if (!document.hidden) {
+      this.activeTabStartTime = Date.now();
+      console.log(
+        "Initial tab visible, setting start time:",
+        this.activeTabStartTime
+      );
+    }
+
+    console.log("Event listeners set up complete");
   }
 
   // Utility function for debouncing events
@@ -117,23 +137,49 @@ class TriggerDetector {
 
     if (document.hidden) {
       // Tab became inactive
-      this.checkDurationTriggers(currentDomain, now - this.activeTabStartTime);
+      const duration = now - this.activeTabStartTime;
+      this.checkDurationTriggers(currentDomain, duration);
+      this.lastActiveTime = now;
     } else {
-      // Tab became active
-      this.activeTabStartTime = now;
+      // Tab became active - only reset time if it's been a while
+      const timeSinceLastActive = now - this.lastActiveTime;
+      if (timeSinceLastActive > 5 * 60 * 1000) {
+        // If inactive for more than 5 minutes
+        this.activeTabStartTime = now;
+      }
+      this.lastActiveTime = now;
       this.checkTabLooping(currentDomain);
       this.checkRewardSwitching(currentDomain);
     }
   }
 
+  // Helper function to match domains
+  domainMatches(domain, pattern) {
+    // Remove www. from both domain and pattern for comparison
+    const normalizedDomain = domain.toLowerCase();
+    const normalizedPattern = pattern.replace(/^www\./, "").toLowerCase();
+    return normalizedDomain.includes(normalizedPattern);
+  }
+
   // Check duration-based triggers
   checkDurationTriggers(domain, duration) {
+    console.log("Checking duration triggers:", { domain, duration });
     const triggers = Object.values(TRIGGER_CONFIG).filter(
-      (t) => t.type === "duration" && t.domains.includes(domain)
+      (t) =>
+        t.type === "duration" &&
+        t.domains.some((d) => this.domainMatches(domain, d))
     );
 
+    console.log("Found matching triggers:", triggers);
+
     for (const trigger of triggers) {
+      console.log("Checking trigger:", {
+        trigger,
+        threshold: trigger.timeThreshold,
+        duration,
+      });
       if (duration >= trigger.timeThreshold) {
+        console.log("Trigger threshold met!");
         this.triggerDetected(trigger, { duration });
       }
     }
@@ -159,43 +205,108 @@ class TriggerDetector {
     }
   }
 
-  // Check reward-based switching
-  checkRewardSwitching(currentDomain) {
-    const config = TRIGGER_CONFIG.REWARD_SWITCHING;
-    const now = Date.now();
+  // Handle tab activation
+  async handleTabActivated(activeInfo) {
+    try {
+      const tab = await chrome.tabs.get(activeInfo.tabId);
+      const currentDomain = new URL(tab.url).hostname;
+      const now = Date.now();
+      const timeSinceLastTab = now - this.lastTabTimestamp;
 
-    if (
-      config.productiveApps.includes(this.lastProductiveTab) &&
-      config.rewardApps.includes(currentDomain)
-    ) {
-      this.triggerDetected(config, {
-        from: this.lastProductiveTab,
-        to: currentDomain,
+      console.log("Tab activated:", {
+        currentDomain,
+        timeSinceLastTab,
       });
-    }
 
-    if (config.productiveApps.includes(currentDomain)) {
-      this.lastProductiveTab = currentDomain;
+      this.checkRewardSwitching(currentDomain, timeSinceLastTab);
+      this.lastTabTimestamp = now;
+    } catch (error) {
+      console.error("Error handling tab activation:", error);
     }
   }
 
-  // Handle hover events
-  handleHover(event) {
-    const config = TRIGGER_CONFIG.HOVER_WITHOUT_ACTION;
-    const now = Date.now();
+  // Handle tab URL updates
+  async handleTabUpdated(tabId, changeInfo, tab) {
+    if (changeInfo.status === "complete" && tab.active) {
+      try {
+        const currentDomain = new URL(tab.url).hostname;
+        const now = Date.now();
+        const timeSinceLastTab = now - this.lastTabTimestamp;
 
-    if (!this.hoverHistory.has("tabs")) {
-      this.hoverHistory.set("tabs", []);
+        console.log("Tab updated:", {
+          currentDomain,
+          timeSinceLastTab,
+        });
+
+        this.checkRewardSwitching(currentDomain, timeSinceLastTab);
+        this.lastTabTimestamp = now;
+      } catch (error) {
+        console.error("Error handling tab update:", error);
+      }
+    }
+  }
+
+  // Helper function to check if domain matches any in the list
+  isDomainInList(domain, list) {
+    const normalizedDomain = domain.toLowerCase();
+    return list.some((app) => normalizedDomain.includes(app.toLowerCase()));
+  }
+
+  // Check reward-based switching
+  async checkRewardSwitching(currentDomain, timeSinceLastTab) {
+    const config = TRIGGER_CONFIG.REWARD_SWITCHING;
+    const lastProductiveVisit = await this.getLastProductiveVisit();
+
+    console.log("Checking reward switching:", {
+      currentDomain,
+      lastProductiveVisit,
+      timeSinceLastTab,
+      timeThreshold: config.timeThreshold,
+      isCurrentDomainReward: this.isDomainInList(
+        currentDomain,
+        config.rewardApps
+      ),
+      wasLastTabProductive: lastProductiveVisit
+        ? config.productiveApps.includes(lastProductiveVisit.domain)
+        : false,
+      productiveApps: config.productiveApps,
+      rewardApps: config.rewardApps,
+    });
+
+    console.log(
+      "Domain checks:",
+      this.isDomainInList(currentDomain, config.rewardApps),
+      lastProductiveVisit &&
+        config.productiveApps.includes(lastProductiveVisit.domain)
+    );
+
+    // Check if we're switching from productive to reward
+    if (
+      lastProductiveVisit &&
+      config.productiveApps.includes(lastProductiveVisit.domain) &&
+      this.isDomainInList(currentDomain, config.rewardApps)
+    ) {
+      console.log("Reward switching detected!", {
+        from: lastProductiveVisit.domain,
+        to: currentDomain,
+        timeTaken: timeSinceLastTab,
+        timeThreshold: config.timeThreshold,
+      });
+      this.triggerDetected(config, {
+        from: lastProductiveVisit.domain,
+        to: currentDomain,
+        timeTaken: timeSinceLastTab,
+      });
     }
 
-    const hovers = this.hoverHistory.get("tabs");
-    hovers.push(now);
+    // Update last productive tab if current site is productive
+    await this.handleTabChange(currentDomain, config);
+  }
 
-    const recentHovers = hovers.filter(
-      (time) => now - time < config.timeWindow
-    );
-    if (recentHovers.length >= config.hoverThreshold) {
-      this.triggerDetected(config, { hoverCount: recentHovers.length });
+  async handleTabChange(currentDomain, config) {
+    if (config.productiveApps.includes(currentDomain)) {
+      console.log("Productive site visited:", currentDomain);
+      await this.storeProductiveVisit(currentDomain);
     }
   }
 
@@ -247,7 +358,7 @@ class TriggerDetector {
     // Clear trigger after delay
     setTimeout(() => {
       this.activeTriggers.delete(triggerId);
-    }, 5 * 60 * 1000); // 5 minutes cooldown
+    }, 0.5 * 60 * 1000); // 5 minutes cooldown
   }
 
   // Cleanup old tracking data
@@ -278,14 +389,39 @@ class TriggerDetector {
         actions.filter((time) => now - time < ONE_HOUR)
       );
     });
+  }
 
-    // Clean up hover history
-    this.hoverHistory.forEach((hovers, key) => {
-      this.hoverHistory.set(
-        key,
-        hovers.filter((time) => now - time < ONE_HOUR)
-      );
+  startPeriodicChecks() {
+    // Check every 10 seconds for all duration-based triggers
+    setInterval(() => {
+      if (!document.hidden) {
+        const currentDomain = window.location.hostname;
+        const now = Date.now();
+        const duration = now - this.activeTabStartTime;
+        this.checkDurationTriggers(currentDomain, duration);
+      }
+    }, 10000);
+  }
+
+  // Helper function to store productive site visit
+  async storeProductiveVisit(domain) {
+    await chrome.storage.local.set({
+      productiveVisit: {
+        domain: domain,
+        startTime: Date.now(),
+      },
     });
+    console.log("✅ Stored productive visit in trigger:", {
+      domain: domain,
+      startTime: Date.now(),
+    });
+  }
+
+  // Helper function to get last productive visit
+  async getLastProductiveVisit() {
+    const result = await chrome.storage.local.get("productiveVisit");
+    console.log("📖 Reading productive visit in trigger:", result);
+    return result.productiveVisit || null;
   }
 }
 

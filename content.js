@@ -1,5 +1,37 @@
 // Import trigger detector
-import { TriggerDetector } from "./triggerDetector.js";
+let TRIGGER_CONFIG;
+let TriggerDetector;
+
+async function initializeModules() {
+  try {
+    console.log("Initializing modules...");
+    const triggerConfigUrl = chrome.runtime.getURL("triggers.js");
+    const triggerDetectorUrl = chrome.runtime.getURL("triggerDetector.js");
+
+    console.log("Loading from URLs:", { triggerConfigUrl, triggerDetectorUrl });
+
+    const triggerConfigModule = await import(triggerConfigUrl);
+    const triggerDetectorModule = await import(triggerDetectorUrl);
+
+    console.log("Modules loaded:", {
+      triggerConfigModule,
+      triggerDetectorModule,
+    });
+
+    TRIGGER_CONFIG = triggerConfigModule.TRIGGER_CONFIG;
+    TriggerDetector = triggerDetectorModule.TriggerDetector;
+
+    console.log("Config and Detector assigned:", {
+      TRIGGER_CONFIG,
+      TriggerDetector,
+    });
+
+    // Initialize after modules are loaded
+    addFloatingEmoji();
+  } catch (error) {
+    console.error("Error initializing modules:", error);
+  }
+}
 
 // Track website visit data
 let startTime = Date.now();
@@ -325,6 +357,7 @@ function initializeTriggerDetector() {
 
 // Function to create and show trigger notification
 function showTriggerNotification(trigger, data) {
+  console.log("Showing trigger notification:", { trigger, data });
   if (triggerBubble) {
     triggerBubble.remove();
   }
@@ -594,8 +627,14 @@ async function addFloatingEmoji() {
   }
 }
 
-// Initial addition of emoji
-addFloatingEmoji();
+// Move the initial call inside an async function
+async function initialize() {
+  console.log("Starting initialization...");
+  await initializeModules();
+  console.log("Initialization complete");
+}
+
+initialize();
 
 // Create MutationObserver for dynamic content
 const observer = new MutationObserver((mutations) => {

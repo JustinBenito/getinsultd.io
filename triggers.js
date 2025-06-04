@@ -1,5 +1,5 @@
 // Trigger Definitions and Configuration
-const TRIGGER_CONFIG = {
+export const TRIGGER_CONFIG = {
   // Social Media Triggers
   EXCESSIVE_SOCIAL_MEDIA: {
     id: "excessive_social_media",
@@ -7,12 +7,17 @@ const TRIGGER_CONFIG = {
     description: "Staying too long on social media platforms",
     domains: [
       "twitter.com",
+      "www.twitter.com",
       "instagram.com",
+      "www.instagram.com",
       "facebook.com",
+      "www.facebook.com",
       "youtube.com",
+      "www.youtube.com",
       "tiktok.com",
+      "www.tiktok.com",
     ],
-    timeThreshold: 5 * 60 * 1000, // 5 minutes in milliseconds
+    timeThreshold: 1 * 60 * 1000, // 1 minute in milliseconds
     type: "duration",
   },
 
@@ -40,7 +45,7 @@ const TRIGGER_CONFIG = {
     description: "Excessive scrolling behavior",
     domains: ["reddit.com", "instagram.com", "twitter.com", "facebook.com"],
     scrollThreshold: 8,
-    timeWindow: 10 * 60 * 1000, // 10 minutes in milliseconds
+    timeWindow: 1 * 60 * 1000, // 10 minutes in milliseconds
     type: "behavior",
   },
 
@@ -49,17 +54,8 @@ const TRIGGER_CONFIG = {
     name: "Binge Watching",
     description: "Extended streaming during work hours",
     domains: ["netflix.com", "primevideo.com", "hulu.com", "disney.com"],
-    timeThreshold: 5 * 60 * 1000, // 5 minutes in milliseconds
+    timeThreshold: 1 * 60 * 1000, // 5 minutes in milliseconds
     type: "duration",
-  },
-
-  TAB_LOOPING: {
-    id: "tab_looping",
-    name: "Tab Looping",
-    description: "Repeatedly opening the same tab",
-    repeatThreshold: 3,
-    timeWindow: 10 * 60 * 1000, // 10 minutes in milliseconds
-    type: "behavior",
   },
 
   OVERLOADED_TABS: {
@@ -94,15 +90,6 @@ const TRIGGER_CONFIG = {
     description: "10+ tab switches within 60 seconds",
     switchThreshold: 10,
     timeWindow: 60 * 1000, // 60 seconds in milliseconds
-    type: "behavior",
-  },
-
-  HOVER_WITHOUT_ACTION: {
-    id: "hover_without_action",
-    name: "Hovering Without Action",
-    description: "Repeatedly hovering over tabs without clicking",
-    hoverThreshold: 5,
-    timeWindow: 10 * 1000, // 10 seconds in milliseconds
     type: "behavior",
   },
 
@@ -171,6 +158,3 @@ const TRIGGER_CONFIG = {
     type: "instant",
   },
 };
-
-// Export the configuration
-export { TRIGGER_CONFIG };
