@@ -3,9 +3,10 @@
   "name": "Smile Border",
   "version": "1.0",
   "description": "Add a floating smile emoji that adds a green border to webpages when clicked",
-  "permissions": ["activeTab"],
+  "permissions": ["activeTab", "storage", "scripting"],
   "host_permissions": [
-    "*://*.youtube.com/*"
+    "*://*.youtube.com/*",
+    "<all_urls>"
   ],
   "content_scripts": [
     {
