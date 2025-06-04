@@ -4,7 +4,7 @@
   right: 20px;
   font-size: 32px;
   cursor: pointer;
-  z-index: 999999;
+  z-index: 9999999;
   background: white;
   border-radius: 50%;
   width: 48px;
@@ -15,6 +15,7 @@
   box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
   user-select: none;
   transition: transform 0.2s ease;
+  pointer-events: auto !important;
 }
 
 .floating-emoji:hover {
@@ -25,4 +26,10 @@
   border: 8px solid #4caf50 !important;
   box-sizing: border-box;
   min-height: 100vh;
+}
+
+/* YouTube specific styles */
+ytd-app {
+  position: relative;
+  z-index: 1;
 }
