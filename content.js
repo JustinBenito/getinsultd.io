@@ -23,6 +23,7 @@ function getWebsiteMetadata() {
     title: document.title || "Unknown Title",
     description: "",
     url: window.location.href,
+    hostname: window.location.hostname,
     favicon: "",
   };
 
@@ -79,45 +80,51 @@ function createStatsBubble() {
   return bubble;
 }
 
+// Function to sort websites by total time
+function sortWebsitesByTime(sites) {
+  return Object.entries(sites).sort((a, b) => {
+    const totalTimeA =
+      a[1].totalTime +
+      (a[0] === window.location.hostname ? Date.now() - startTime : 0);
+    const totalTimeB =
+      b[1].totalTime +
+      (b[0] === window.location.hostname ? Date.now() - startTime : 0);
+    return totalTimeB - totalTimeA;
+  });
+}
+
 // Function to update stats display
 async function updateStatsBubble(bubble) {
-  const currentUrl = window.location.hostname;
-  const data = await chrome.storage.local.get(currentUrl);
-  const siteData = data[currentUrl] || {
-    totalTime: 0,
-    visits: 0,
-    lastVisit: null,
-    metadata: getWebsiteMetadata(),
-  };
+  try {
+    const data = await chrome.storage.local.get(null); // Get all stored data
+    const sortedSites = sortWebsitesByTime(data);
 
-  const currentSession = Date.now() - startTime;
-  const totalTime = siteData.totalTime + currentSession;
+    let html = "<h3>All Websites Statistics</h3>";
 
-  bubble.innerHTML = `
-    <h3>${siteData.metadata.title}</h3>
-    <div class="stats-item">
-      <span class="label">Current Session:</span>
-      <span class="value">${formatDuration(currentSession)}</span>
-    </div>
-    <div class="stats-item">
-      <span class="label">Total Time:</span>
-      <span class="value">${formatDuration(totalTime)}</span>
-    </div>
-    <div class="stats-item">
-      <span class="label">Total Visits:</span>
-      <span class="value">${siteData.visits + 1}</span>
-    </div>
-    <div class="meta-section">
-      <div class="stats-item">
-        <span class="label">Description:</span>
-      </div>
-      <div style="font-size: 12px; color: #666; margin-top: 4px;">
-        ${siteData.metadata.description.slice(0, 100)}${
-    siteData.metadata.description.length > 100 ? "..." : ""
+    for (const [hostname, siteData] of sortedSites) {
+      const isCurrentSite = hostname === window.location.hostname;
+      const currentSessionTime = isCurrentSite ? Date.now() - startTime : 0;
+      const totalTime = siteData.totalTime + currentSessionTime;
+
+      html += `
+        <div class="website-stats-item ${isCurrentSite ? "current-site" : ""}">
+          <div class="website-title">${siteData.metadata.title}</div>
+          <div class="website-url">${hostname}</div>
+          <div class="stats-details">
+            <span>Visits: ${siteData.visits}${
+        isCurrentSite ? " (Current)" : ""
+      }</span>
+            <span class="time">${formatDuration(totalTime)}</span>
+          </div>
+        </div>
+      `;
+    }
+
+    bubble.innerHTML = html;
+  } catch (error) {
+    console.error("Error updating stats bubble:", error);
+    bubble.innerHTML = "<h3>Error loading statistics</h3>";
   }
-      </div>
-    </div>
-  `;
 }
 
 // Function to add the emoji element
