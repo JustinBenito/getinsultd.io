@@ -1,9 +1,14 @@
 {
   "manifest_version": 3,
-  "name": "Smile Border",
+  "name": "Smile Border with Productivity Triggers",
   "version": "1.0",
-  "description": "Add a floating smile emoji that adds a green border to webpages when clicked",
-  "permissions": ["activeTab", "storage", "scripting"],
+  "description": "Add a floating smile emoji that adds a green border to webpages and monitors productivity triggers",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "scripting",
+    "tabs"
+  ],
   "host_permissions": [
     "*://*.youtube.com/*",
     "*://*.openai.com/*",
@@ -14,7 +19,11 @@
     {
       "matches": ["<all_urls>"],
       "css": ["styles.css"],
-      "js": ["content.js"],
+      "js": [
+        "triggers.js",
+        "triggerDetector.js",
+        "content.js"
+      ],
       "run_at": "document_idle",
       "all_frames": true
     }

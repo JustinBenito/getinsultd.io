@@ -1,3 +1,6 @@
+// Import trigger detector
+import { TriggerDetector } from "./triggerDetector.js";
+
 // Track website visit data
 let startTime = Date.now();
 let isStatsBubbleVisible = false;
@@ -7,6 +10,8 @@ let storageUpdateInterval;
 let lastStorageUpdate = Date.now();
 let containerFindAttempts = 0;
 const MAX_CONTAINER_FIND_ATTEMPTS = 10;
+let triggerDetector;
+let triggerBubble = null;
 
 // Function to check if we're on ChatGPT
 function isChatGPT() {
@@ -310,6 +315,150 @@ function cleanupAndRemoveListeners() {
   if (existingBubble) existingBubble.remove();
 }
 
+// Initialize trigger detector
+function initializeTriggerDetector() {
+  triggerDetector = new TriggerDetector();
+  triggerDetector.onTrigger((trigger, data) => {
+    showTriggerNotification(trigger, data);
+  });
+}
+
+// Function to create and show trigger notification
+function showTriggerNotification(trigger, data) {
+  if (triggerBubble) {
+    triggerBubble.remove();
+  }
+
+  triggerBubble = document.createElement("div");
+  triggerBubble.className = "trigger-bubble";
+
+  const content = document.createElement("div");
+  content.className = "trigger-content";
+
+  const header = document.createElement("div");
+  header.className = "trigger-header";
+  header.innerHTML = `
+    <h3>${trigger.name}</h3>
+    <span class="close-trigger">×</span>
+  `;
+
+  const body = document.createElement("div");
+  body.className = "trigger-body";
+
+  // Format trigger-specific data
+  let detailsHtml = `<p>${trigger.description}</p>`;
+
+  switch (trigger.type) {
+    case "duration":
+      detailsHtml += `<p>Time spent: ${formatDuration(data.duration)}</p>`;
+      break;
+    case "behavior":
+      if (data.scrollCount) {
+        detailsHtml += `<p>Scroll count: ${data.scrollCount}</p>`;
+      }
+      if (data.visits) {
+        detailsHtml += `<p>Repeated visits: ${data.visits}</p>`;
+      }
+      if (data.from && data.to) {
+        detailsHtml += `<p>Switched from: ${data.from}<br>To: ${data.to}</p>`;
+      }
+      break;
+    case "content":
+      detailsHtml += `<p>Current content: ${data.title || "N/A"}</p>`;
+      break;
+  }
+
+  body.innerHTML = detailsHtml;
+
+  content.appendChild(header);
+  content.appendChild(body);
+  triggerBubble.appendChild(content);
+
+  // Add styles
+  const styles = document.createElement("style");
+  styles.textContent = `
+    .trigger-bubble {
+      position: fixed;
+      bottom: 90px;
+      right: 20px;
+      width: 300px;
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+      z-index: 9999997;
+      opacity: 0;
+      transform: translateY(20px);
+      transition: opacity 0.3s ease, transform 0.3s ease;
+      pointer-events: auto !important;
+    }
+    
+    .trigger-bubble.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+    
+    .trigger-content {
+      padding: 16px;
+    }
+    
+    .trigger-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    
+    .trigger-header h3 {
+      margin: 0;
+      color: #e74c3c;
+      font-size: 16px;
+    }
+    
+    .close-trigger {
+      cursor: pointer;
+      font-size: 20px;
+      color: #666;
+      padding: 4px;
+    }
+    
+    .trigger-body {
+      font-size: 14px;
+      color: #666;
+    }
+    
+    .trigger-body p {
+      margin: 8px 0;
+    }
+  `;
+
+  document.head.appendChild(styles);
+  document.body.appendChild(triggerBubble);
+
+  // Add close button handler
+  const closeButton = triggerBubble.querySelector(".close-trigger");
+  closeButton.addEventListener("click", () => {
+    triggerBubble.classList.remove("visible");
+    setTimeout(() => triggerBubble.remove(), 300);
+  });
+
+  // Show the bubble with animation
+  requestAnimationFrame(() => {
+    triggerBubble.classList.add("visible");
+  });
+
+  // Auto-hide after 10 seconds
+  setTimeout(() => {
+    if (triggerBubble && triggerBubble.parentNode) {
+      triggerBubble.classList.remove("visible");
+      setTimeout(() => {
+        if (triggerBubble && triggerBubble.parentNode) {
+          triggerBubble.remove();
+        }
+      }, 300);
+    }
+  }, 10000);
+}
+
 // Function to add the emoji element with retry mechanism
 async function addFloatingEmoji() {
   if (!isExtensionContextValid()) {
@@ -318,6 +467,11 @@ async function addFloatingEmoji() {
   }
 
   try {
+    // Initialize trigger detector if not already initialized
+    if (!triggerDetector) {
+      initializeTriggerDetector();
+    }
+
     // Remove existing elements
     const existingEmoji = safeDOMQuery(".floating-emoji");
     const existingBubble = safeDOMQuery(".stats-bubble");
