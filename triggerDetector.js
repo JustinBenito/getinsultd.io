@@ -516,10 +516,19 @@ export class TriggerDetector {
     this.activeTriggers.add(triggerId);
     this.notifyCallbacks(trigger, data);
 
-    // Clear trigger after delay
+    // For YouTube Shorts specifically, clear the trigger when navigating away from shorts
+    if (triggerId === "youtube_shorts") {
+      // Clear trigger when navigating to a non-shorts URL
+      if (!window.location.href.includes("/shorts/")) {
+        this.activeTriggers.delete(triggerId);
+        return;
+      }
+    }
+
+    // Clear trigger after delay (5 minutes cooldown for most triggers)
     setTimeout(() => {
       this.activeTriggers.delete(triggerId);
-    }, 0.5 * 60 * 1000); // 5 minutes cooldown
+    }, 5 * 60 * 1000); // 5 minutes cooldown
   }
 
   // Cleanup old tracking data
