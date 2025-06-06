@@ -21,6 +21,14 @@ export const TRIGGER_CONFIG = {
     type: "duration",
   },
 
+  YOUTUBE_SHORTS: {
+    id: "youtube_shorts",
+    name: "YouTube Shorts Detection",
+    description: "Why are you watching YouTube Shorts?",
+    domains: ["youtube.com", "www.youtube.com"],
+    type: "instant",
+  },
+
   NON_EDUCATIONAL_YOUTUBE: {
     id: "non_educational_youtube",
     name: "Non-Educational YouTube",
@@ -97,8 +105,10 @@ export const TRIGGER_CONFIG = {
     id: "frequent_typing_deleting",
     name: "Frequent Typing and Deleting",
     description: "Erratic typing behavior",
-    actionThreshold: 3,
-    timeWindow: 30 * 1000, // 30 seconds in milliseconds
+    actionThreshold: 10,
+    deleteThreshold: 5,
+    timeWindow: 10 * 1000,
+    cooldownPeriod: 60 * 1000,
     type: "behavior",
   },
 

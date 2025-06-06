@@ -227,3 +227,46 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     }
   }
 });
+
+// Background script for handling chrome API calls
+
+// Check tabs periodically
+setInterval(checkTabs, 60000); // Check every minute
+checkTabs(); // Initial check
+
+async function checkTabs() {
+  try {
+    const tabs = await chrome.tabs.query({});
+    const tabCount = tabs.length;
+    const threshold = 15; // Match the threshold from triggers.js
+
+    console.log("🔍 Background Tab Check:", {
+      timestamp: new Date().toLocaleTimeString(),
+      currentTabCount: tabCount,
+      threshold: threshold,
+      isOverloaded: tabCount >= threshold,
+    });
+
+    // Send message to all content scripts about tab count
+    const message = {
+      type: "TAB_COUNT_UPDATE",
+      data: {
+        tabCount,
+        timestamp: Date.now(),
+        isOverloaded: tabCount >= threshold,
+      },
+    };
+
+    // Broadcast to all tabs
+    const allTabs = await chrome.tabs.query({});
+    allTabs.forEach((tab) => {
+      try {
+        chrome.tabs.sendMessage(tab.id, message);
+      } catch (error) {
+        console.error("Error sending message to tab:", error);
+      }
+    });
+  } catch (error) {
+    console.error("Error checking tabs in background:", error);
+  }
+}

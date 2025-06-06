@@ -13,6 +13,8 @@ export class TriggerDetector {
     this.activeTriggers = new Set();
     this.callbacks = new Map();
     this.youtubeMonitoring = null;
+    this.lastTabCount = 0;
+    this.lastUrl = window.location.href;
 
     console.log(
       "TriggerDetector initialized, start time:",
@@ -33,6 +35,44 @@ export class TriggerDetector {
 
     // Initialize YouTube monitoring if we're on YouTube
     this.initializeYouTubeMonitoring();
+
+    // Listen for messages from background script
+    this.setupMessageListener();
+
+    // Set up URL change observer
+    this.setupUrlChangeObserver();
+
+    // Check initial URL
+    this.checkForYouTubeShorts(window.location.href);
+  }
+
+  setupMessageListener() {
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (message.type === "TAB_COUNT_UPDATE") {
+        this.handleTabCountUpdate(message.data);
+      }
+      // Make sure to return false since we're not using sendResponse
+      return false;
+    });
+  }
+
+  handleTabCountUpdate(data) {
+    const { tabCount, isOverloaded } = data;
+    this.lastTabCount = tabCount;
+
+    console.log("📊 Tab Count Update:", {
+      timestamp: new Date().toLocaleTimeString(),
+      currentTabCount: tabCount,
+      threshold: TRIGGER_CONFIG.OVERLOADED_TABS.tabThreshold,
+      isOverloaded,
+    });
+
+    if (isOverloaded) {
+      this.triggerDetected(TRIGGER_CONFIG.OVERLOADED_TABS, {
+        tabCount,
+        threshold: TRIGGER_CONFIG.OVERLOADED_TABS.tabThreshold,
+      });
+    }
   }
 
   // Initialize all event listeners
@@ -135,7 +175,7 @@ export class TriggerDetector {
   }
 
   // Handle tab visibility changes
-  async handleTabVisibility() {
+  handleTabVisibility() {
     const currentDomain = window.location.hostname;
     const now = Date.now();
 
@@ -157,12 +197,10 @@ export class TriggerDetector {
         this.activeTabStartTime = now;
       }
       this.lastActiveTime = now;
-      this.checkTabLooping(currentDomain);
-      this.checkRewardSwitching(currentDomain);
 
       // Restart YouTube monitoring when tab becomes active
       if (currentDomain.includes("youtube.com")) {
-        await this.initializeYouTubeMonitoring();
+        this.initializeYouTubeMonitoring();
       }
     }
   }
@@ -329,18 +367,64 @@ export class TriggerDetector {
     const config = TRIGGER_CONFIG.FREQUENT_TYPING_DELETING;
     const now = Date.now();
 
-    if (!this.typeDeleteHistory.has("input")) {
-      this.typeDeleteHistory.set("input", []);
+    // Initialize separate tracking for typing and deleting
+    if (!this.typeDeleteHistory.has("typing")) {
+      this.typeDeleteHistory.set("typing", []);
+    }
+    if (!this.typeDeleteHistory.has("deleting")) {
+      this.typeDeleteHistory.set("deleting", []);
     }
 
-    const actions = this.typeDeleteHistory.get("input");
+    // Determine if this is a delete action
+    const isDelete =
+      event.inputType === "deleteContentBackward" ||
+      event.inputType === "deleteContentForward" ||
+      event.key === "Backspace" ||
+      event.key === "Delete";
+
+    // Get the appropriate action array
+    const actionType = isDelete ? "deleting" : "typing";
+    const actions = this.typeDeleteHistory.get(actionType);
     actions.push(now);
 
-    const recentActions = actions.filter(
-      (time) => now - time < config.timeWindow
-    );
-    if (recentActions.length >= config.actionThreshold) {
-      this.triggerDetected(config, { actionCount: recentActions.length });
+    // Get recent actions within the time window
+    const recentTyping = this.typeDeleteHistory
+      .get("typing")
+      .filter((time) => now - time < config.timeWindow);
+    const recentDeleting = this.typeDeleteHistory
+      .get("deleting")
+      .filter((time) => now - time < config.timeWindow);
+
+    // Update the history with only recent actions
+    this.typeDeleteHistory.set("typing", recentTyping);
+    this.typeDeleteHistory.set("deleting", recentDeleting);
+
+    // Check if we've hit both thresholds
+    if (
+      recentTyping.length >= config.actionThreshold &&
+      recentDeleting.length >= config.deleteThreshold
+    ) {
+      // Calculate typing speed (actions per second)
+      const totalActions = recentTyping.length + recentDeleting.length;
+      const timeSpan =
+        (Math.max(...recentTyping, ...recentDeleting) -
+          Math.min(...recentTyping, ...recentDeleting)) /
+        1000;
+      const actionsPerSecond = totalActions / timeSpan;
+
+      console.log("⌨️ Typing Pattern:", {
+        typingCount: recentTyping.length,
+        deletingCount: recentDeleting.length,
+        timeWindow: config.timeWindow / 1000 + "s",
+        actionsPerSecond: actionsPerSecond.toFixed(2),
+      });
+
+      this.triggerDetected(config, {
+        typingCount: recentTyping.length,
+        deletingCount: recentDeleting.length,
+        actionsPerSecond: actionsPerSecond.toFixed(2),
+        timeWindow: config.timeWindow / 1000,
+      });
     }
   }
 
@@ -415,43 +499,6 @@ export class TriggerDetector {
         this.checkDurationTriggers(currentDomain, duration);
       }
     }, 10000);
-
-    // Check for overloaded tabs every minute
-    setInterval(async () => {
-      await this.checkOverloadedTabs();
-    }, 60000); // Every minute
-  }
-
-  /**
-   * Check for overloaded tabs condition
-   */
-  async checkOverloadedTabs() {
-    try {
-      // Get all tabs
-      const tabs = await chrome.tabs.query({});
-      const tabCount = tabs.length;
-
-      console.log(`Current tab count: ${tabCount}`);
-
-      const config = TRIGGER_CONFIG.OVERLOADED_TABS;
-
-      if (tabCount >= config.tabThreshold) {
-        // Get active tab to include in trigger data
-        const activeTabs = await chrome.tabs.query({
-          active: true,
-          currentWindow: true,
-        });
-        const activeTab = activeTabs[0];
-
-        this.triggerDetected(config, {
-          tabCount,
-          activeTabUrl: activeTab?.url || "unknown",
-          threshold: config.tabThreshold,
-        });
-      }
-    } catch (error) {
-      console.error("Error checking for overloaded tabs:", error);
-    }
   }
 
   // Helper function to store productive site visit
@@ -495,6 +542,45 @@ export class TriggerDetector {
       } catch (error) {
         console.error("Error initializing YouTube monitoring:", error);
       }
+    }
+  }
+
+  setupUrlChangeObserver() {
+    // Create a MutationObserver to watch for URL changes
+    const observer = new MutationObserver(() => {
+      const currentUrl = window.location.href;
+      if (currentUrl !== this.lastUrl) {
+        console.log("🔄 URL changed:", currentUrl);
+        this.lastUrl = currentUrl;
+        this.checkForYouTubeShorts(currentUrl);
+      }
+    });
+
+    // Start observing
+    observer.observe(document, { subtree: true, childList: true });
+  }
+
+  checkForYouTubeShorts(url) {
+    try {
+      // Check if we're on YouTube
+      if (!url.includes("youtube.com")) return;
+
+      // Check if this is a shorts URL
+      if (url.includes("/shorts/")) {
+        console.log("🎬 YouTube Shorts detected!");
+        const trigger = TRIGGER_CONFIG.YOUTUBE_SHORTS;
+
+        // Get the shorts ID from the URL
+        const shortsId = url.split("/shorts/")[1]?.split("?")[0] || "unknown";
+
+        this.triggerDetected(trigger, {
+          url: url,
+          shortsId: shortsId,
+          timestamp: new Date().toLocaleTimeString(),
+        });
+      }
+    } catch (error) {
+      console.error("Error checking for YouTube Shorts:", error);
     }
   }
 }
