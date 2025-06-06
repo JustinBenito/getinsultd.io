@@ -6,17 +6,23 @@ async function initializeModules() {
     console.log("Initializing modules...");
     const triggerConfigUrl = chrome.runtime.getURL("triggers.js");
     const triggerDetectorUrl = chrome.runtime.getURL("triggerDetector.js");
+    const confettiUrl = chrome.runtime.getURL("canvas-confetti.js");
 
-    console.log("Loading from URLs:", { triggerConfigUrl, triggerDetectorUrl });
+    console.log("Loading from URLs:", {
+      triggerConfigUrl,
+      triggerDetectorUrl,
+      confettiUrl,
+    });
 
     // Import modules
     const { TriggerDetector } = await import(triggerDetectorUrl);
+    const { fireCelebrationConfetti } = await import(confettiUrl);
 
     console.log("TriggerDetector loaded:", TriggerDetector);
 
     // Initialize after modules are loaded
     await initializeTriggerDetector(TriggerDetector);
-    addFloatingEmoji();
+    addFloatingEmoji(fireCelebrationConfetti);
   } catch (error) {
     console.error("Error initializing modules:", error);
   }
@@ -537,7 +543,7 @@ async function initializeStorageIfNeeded() {
 }
 
 // Function to add the emoji element with retry mechanism
-async function addFloatingEmoji() {
+async function addFloatingEmoji(fireCelebrationConfetti) {
   if (!isExtensionContextValid()) {
     console.warn("Extension context invalid, not adding emoji");
     return;
@@ -587,7 +593,7 @@ async function addFloatingEmoji() {
     ) {
       if (retryCount < MAX_RETRIES) {
         retryCount++;
-        setTimeout(addFloatingEmoji, 1000);
+        setTimeout(() => addFloatingEmoji(fireCelebrationConfetti), 1000);
         return;
       }
       throw new Error("Failed to add elements to DOM");
@@ -607,6 +613,9 @@ async function addFloatingEmoji() {
         alert("Extension needs to be reloaded. Please refresh the page.");
         return;
       }
+
+      // Fire confetti celebration
+      fireCelebrationConfetti();
 
       isBorderActive = !isBorderActive;
       isStatsBubbleVisible = !isStatsBubbleVisible;
@@ -675,7 +684,7 @@ async function addFloatingEmoji() {
     console.error("Error in addFloatingEmoji:", error);
     if (retryCount < MAX_RETRIES) {
       retryCount++;
-      setTimeout(addFloatingEmoji, 1000);
+      setTimeout(() => addFloatingEmoji(fireCelebrationConfetti), 1000);
     }
   }
 }

@@ -31,7 +31,8 @@
         "triggers.js",
         "triggerDetector.js",
         "youtubeTrigger.js",
-        "youtubeUtils.js"
+        "youtubeUtils.js",
+        "canvas-confetti.js"
       ],
       "matches": ["<all_urls>"]
     }
