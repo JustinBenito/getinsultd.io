@@ -1,6 +1,6 @@
 import { TRIGGER_CONFIG } from "./triggers.js";
 
-class TriggerDetector {
+export class TriggerDetector {
   constructor() {
     // Initialize tracking data
     this.scrollEvents = new Map();
@@ -12,6 +12,7 @@ class TriggerDetector {
     this.lastTabTimestamp = Date.now();
     this.activeTriggers = new Set();
     this.callbacks = new Map();
+    this.youtubeMonitoring = null;
 
     console.log(
       "TriggerDetector initialized, start time:",
@@ -29,6 +30,9 @@ class TriggerDetector {
       chrome.tabs.onActivated.addListener(this.handleTabActivated.bind(this));
       chrome.tabs.onUpdated.addListener(this.handleTabUpdated.bind(this));
     }
+
+    // Initialize YouTube monitoring if we're on YouTube
+    this.initializeYouTubeMonitoring();
   }
 
   // Initialize all event listeners
@@ -131,7 +135,7 @@ class TriggerDetector {
   }
 
   // Handle tab visibility changes
-  handleTabVisibility() {
+  async handleTabVisibility() {
     const currentDomain = window.location.hostname;
     const now = Date.now();
 
@@ -140,8 +144,13 @@ class TriggerDetector {
       const duration = now - this.activeTabStartTime;
       this.checkDurationTriggers(currentDomain, duration);
       this.lastActiveTime = now;
+
+      // Stop YouTube monitoring when tab is hidden
+      if (currentDomain.includes("youtube.com") && this.youtubeMonitoring) {
+        this.youtubeMonitoring.stop();
+      }
     } else {
-      // Tab became active - only reset time if it's been a while
+      // Tab became active
       const timeSinceLastActive = now - this.lastActiveTime;
       if (timeSinceLastActive > 5 * 60 * 1000) {
         // If inactive for more than 5 minutes
@@ -150,6 +159,11 @@ class TriggerDetector {
       this.lastActiveTime = now;
       this.checkTabLooping(currentDomain);
       this.checkRewardSwitching(currentDomain);
+
+      // Restart YouTube monitoring when tab becomes active
+      if (currentDomain.includes("youtube.com")) {
+        await this.initializeYouTubeMonitoring();
+      }
     }
   }
 
@@ -401,6 +415,43 @@ class TriggerDetector {
         this.checkDurationTriggers(currentDomain, duration);
       }
     }, 10000);
+
+    // Check for overloaded tabs every minute
+    setInterval(async () => {
+      await this.checkOverloadedTabs();
+    }, 60000); // Every minute
+  }
+
+  /**
+   * Check for overloaded tabs condition
+   */
+  async checkOverloadedTabs() {
+    try {
+      // Get all tabs
+      const tabs = await chrome.tabs.query({});
+      const tabCount = tabs.length;
+
+      console.log(`Current tab count: ${tabCount}`);
+
+      const config = TRIGGER_CONFIG.OVERLOADED_TABS;
+
+      if (tabCount >= config.tabThreshold) {
+        // Get active tab to include in trigger data
+        const activeTabs = await chrome.tabs.query({
+          active: true,
+          currentWindow: true,
+        });
+        const activeTab = activeTabs[0];
+
+        this.triggerDetected(config, {
+          tabCount,
+          activeTabUrl: activeTab?.url || "unknown",
+          threshold: config.tabThreshold,
+        });
+      }
+    } catch (error) {
+      console.error("Error checking for overloaded tabs:", error);
+    }
   }
 
   // Helper function to store productive site visit
@@ -423,6 +474,27 @@ class TriggerDetector {
     console.log("📖 Reading productive visit in trigger:", result);
     return result.productiveVisit || null;
   }
-}
 
-export { TriggerDetector };
+  // Initialize YouTube monitoring if on YouTube
+  async initializeYouTubeMonitoring() {
+    const currentDomain = window.location.hostname;
+    if (currentDomain.includes("youtube.com")) {
+      console.log("Initializing YouTube monitoring...");
+      try {
+        const youtubeTriggerUrl = chrome.runtime.getURL("youtubeTrigger.js");
+        const { startYouTubeMonitoring, stopYouTubeMonitoring } = await import(
+          youtubeTriggerUrl
+        );
+        this.youtubeMonitoring = {
+          start: startYouTubeMonitoring,
+          stop: stopYouTubeMonitoring,
+        };
+        this.youtubeMonitoring.start((trigger, data) =>
+          this.triggerDetected(trigger, data)
+        );
+      } catch (error) {
+        console.error("Error initializing YouTube monitoring:", error);
+      }
+    }
+  }
+}

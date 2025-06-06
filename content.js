@@ -1,6 +1,5 @@
 // Import trigger detector
-let TRIGGER_CONFIG;
-let TriggerDetector;
+let triggerDetector;
 
 async function initializeModules() {
   try {
@@ -10,23 +9,13 @@ async function initializeModules() {
 
     console.log("Loading from URLs:", { triggerConfigUrl, triggerDetectorUrl });
 
-    const triggerConfigModule = await import(triggerConfigUrl);
-    const triggerDetectorModule = await import(triggerDetectorUrl);
+    // Import modules
+    const { TriggerDetector } = await import(triggerDetectorUrl);
 
-    console.log("Modules loaded:", {
-      triggerConfigModule,
-      triggerDetectorModule,
-    });
-
-    TRIGGER_CONFIG = triggerConfigModule.TRIGGER_CONFIG;
-    TriggerDetector = triggerDetectorModule.TriggerDetector;
-
-    console.log("Config and Detector assigned:", {
-      TRIGGER_CONFIG,
-      TriggerDetector,
-    });
+    console.log("TriggerDetector loaded:", TriggerDetector);
 
     // Initialize after modules are loaded
+    await initializeTriggerDetector(TriggerDetector);
     addFloatingEmoji();
   } catch (error) {
     console.error("Error initializing modules:", error);
@@ -42,7 +31,6 @@ let storageUpdateInterval;
 let lastStorageUpdate = Date.now();
 let containerFindAttempts = 0;
 const MAX_CONTAINER_FIND_ATTEMPTS = 10;
-let triggerDetector;
 let triggerBubble = null;
 
 // Function to check if we're on ChatGPT
@@ -291,15 +279,20 @@ function sortWebsitesByTime(sites) {
 // Function to update stats display
 async function updateStatsBubble(bubble) {
   try {
+    console.log("Updating stats bubble...");
     const data = await safeExecuteChromeAPI(() =>
       chrome.storage.local.get(null)
     );
+    console.log("Retrieved storage data:", data);
+
     if (!data) {
+      console.warn("No data available in storage");
       bubble.innerHTML = "<h3>Statistics Unavailable</h3>";
       return;
     }
 
     const sortedSites = sortWebsitesByTime(data);
+    console.log("Sorted sites:", sortedSites);
 
     let html = "<h3>All Websites Statistics</h3>";
 
@@ -308,9 +301,19 @@ async function updateStatsBubble(bubble) {
       const currentSessionTime = isCurrentSite ? Date.now() - startTime : 0;
       const totalTime = siteData.totalTime + currentSessionTime;
 
+      console.log("Processing site:", {
+        hostname,
+        isCurrentSite,
+        currentSessionTime,
+        totalTime,
+        metadata: siteData.metadata,
+      });
+
       html += `
         <div class="website-stats-item ${isCurrentSite ? "current-site" : ""}">
-          <div class="website-title">${siteData.metadata.title}</div>
+          <div class="website-title">${
+            siteData.metadata?.title || hostname
+          }</div>
           <div class="website-url">${hostname}</div>
           <div class="stats-details">
             <span>Visits: ${siteData.visits}${
@@ -325,7 +328,8 @@ async function updateStatsBubble(bubble) {
     bubble.innerHTML = html;
   } catch (error) {
     console.error("Error updating stats bubble:", error);
-    bubble.innerHTML = "<h3>Error loading statistics</h3>";
+    console.error("Error stack:", error.stack);
+    bubble.innerHTML = `<h3>Error loading statistics</h3><p>${error.message}</p>`;
   }
 }
 
@@ -348,11 +352,17 @@ function cleanupAndRemoveListeners() {
 }
 
 // Initialize trigger detector
-function initializeTriggerDetector() {
-  triggerDetector = new TriggerDetector();
-  triggerDetector.onTrigger((trigger, data) => {
-    showTriggerNotification(trigger, data);
-  });
+async function initializeTriggerDetector(TriggerDetector) {
+  try {
+    console.log("Initializing TriggerDetector...");
+    triggerDetector = new TriggerDetector();
+    triggerDetector.onTrigger((trigger, data) => {
+      showTriggerNotification(trigger, data);
+    });
+    console.log("TriggerDetector initialized successfully");
+  } catch (error) {
+    console.error("Error initializing TriggerDetector:", error);
+  }
 }
 
 // Function to create and show trigger notification
@@ -492,6 +502,40 @@ function showTriggerNotification(trigger, data) {
   }, 10000);
 }
 
+// Function to check if extension storage is accessible
+async function checkStorageAccess() {
+  try {
+    await chrome.storage.local.get(null);
+    return true;
+  } catch (error) {
+    console.error("Storage access error:", error);
+    return false;
+  }
+}
+
+// Function to initialize storage if empty
+async function initializeStorageIfNeeded() {
+  try {
+    const data = await chrome.storage.local.get(null);
+    if (!data || Object.keys(data).length === 0) {
+      console.log("Initializing empty storage...");
+      const currentDomain = window.location.hostname;
+      const initialData = {
+        [currentDomain]: {
+          totalTime: 0,
+          visits: 1,
+          lastVisit: new Date().toISOString(),
+          metadata: getWebsiteMetadata(),
+        },
+      };
+      await chrome.storage.local.set(initialData);
+      console.log("Storage initialized with:", initialData);
+    }
+  } catch (error) {
+    console.error("Error initializing storage:", error);
+  }
+}
+
 // Function to add the emoji element with retry mechanism
 async function addFloatingEmoji() {
   if (!isExtensionContextValid()) {
@@ -500,6 +544,15 @@ async function addFloatingEmoji() {
   }
 
   try {
+    // Check storage access
+    if (!(await checkStorageAccess())) {
+      console.error("Cannot access extension storage");
+      return;
+    }
+
+    // Initialize storage if needed
+    await initializeStorageIfNeeded();
+
     // Initialize trigger detector if not already initialized
     if (!triggerDetector) {
       initializeTriggerDetector();
