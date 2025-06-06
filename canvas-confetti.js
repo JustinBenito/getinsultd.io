@@ -135,7 +135,7 @@
         ticks: 200,
         x: 0.5,
         y: 0.5,
-        shapes: ["square", "circle"],
+        shapes: ["square", "circle", "star"],
         zIndex: 100,
         colors: [
           "#26ccff",
@@ -256,6 +256,34 @@
                             0,
                             2 * Math.PI
                           )
+                      : "star" === e.shape
+                      ? (function (t, x, y, spikes, outerRadius, innerRadius) {
+                          let rot = (Math.PI / 2) * 3;
+                          let step = Math.PI / spikes;
+                          t.beginPath();
+                          t.moveTo(x, y - outerRadius);
+                          for (let i = 0; i < spikes; i++) {
+                            t.lineTo(
+                              x + Math.cos(rot) * outerRadius,
+                              y + Math.sin(rot) * outerRadius
+                            );
+                            rot += step;
+                            t.lineTo(
+                              x + Math.cos(rot) * innerRadius,
+                              y + Math.sin(rot) * innerRadius
+                            );
+                            rot += step;
+                          }
+                          t.lineTo(x, y - outerRadius);
+                          t.closePath();
+                        })(
+                          t,
+                          e.x,
+                          e.y,
+                          5, // 5 spikes
+                          e.scalar * 10, // outer radius
+                          e.scalar * 4 // inner radius
+                        )
                       : (t.moveTo(Math.floor(e.x), Math.floor(e.y)),
                         t.lineTo(Math.floor(e.wobbleX), Math.floor(i)),
                         t.lineTo(Math.floor(o), Math.floor(r)),
@@ -529,4 +557,113 @@ export function fireCelebrationConfetti() {
       startVelocity: 30,
     });
   }, 1000);
+}
+
+// Star confetti effect
+export function fireStarConfetti() {
+  const duration = 2000;
+  const animationEnd = Date.now() + duration;
+  const defaults = {
+    startVelocity: 25,
+    spread: 360,
+    ticks: 50,
+    zIndex: 9999,
+    shapes: ["star"], // Using star shape
+    colors: ["#FFD700", "#FFA500", "#FF6B6B", "#4FB0FF", "#98FB98"], // Gold, orange, coral, light blue, light green
+    scalar: 2, // Make stars a bit larger
+  };
+
+  function randomInRange(min, max) {
+    return Math.random() * (max - min) + min;
+  }
+
+  const interval = setInterval(function () {
+    const timeLeft = animationEnd - Date.now();
+
+    if (timeLeft <= 0) {
+      return clearInterval(interval);
+    }
+
+    const particleCount = 35 * (timeLeft / duration);
+
+    // Burst of stars from center
+    confetti(
+      Object.assign({}, defaults, {
+        particleCount,
+        origin: { x: randomInRange(0.4, 0.6), y: randomInRange(0.4, 0.6) },
+        gravity: 0.8, // Slightly lower gravity for more floaty effect
+      })
+    );
+  }, 200);
+}
+
+// Fireworks effect for single click
+export function fireFireworks() {
+  const duration = 1500;
+  const animationEnd = Date.now() + duration;
+
+  // Vibrant firework colors
+  const colors = [
+    "#ff0000",
+    "#ffd700",
+    "#00ff00",
+    "#0000ff",
+    "#ff00ff",
+    "#ffffff",
+  ];
+
+  function randomInRange(min, max) {
+    return Math.random() * (max - min) + min;
+  }
+
+  (function launchFirework() {
+    const timeLeft = animationEnd - Date.now();
+
+    if (timeLeft <= 0) return;
+
+    // Launch point - slightly randomized along bottom
+    const startX = randomInRange(0.2, 0.8);
+    const startY = 1;
+
+    // Explosion point - randomized in upper half of screen
+    const endX = randomInRange(0.1, 0.9);
+    const endY = randomInRange(0.1, 0.5);
+
+    // Launch particle
+    confetti({
+      startVelocity: 30,
+      spread: 10,
+      particleCount: 1,
+      scalar: 2,
+      ticks: 50,
+      origin: { x: startX, y: startY },
+      colors: ["#ffb62d"], // Golden trail
+      gravity: 0.4,
+    });
+
+    // After a delay, create the explosion
+    setTimeout(() => {
+      // Create circular explosion
+      for (let i = 0; i < 360; i += 12) {
+        // 30 particles in circle
+        const angle = i * (Math.PI / 180);
+        confetti({
+          particleCount: 1,
+          startVelocity: 20,
+          angle: i,
+          spread: 0,
+          origin: { x: endX, y: endY },
+          colors: [colors[Math.floor(Math.random() * colors.length)]],
+          ticks: 100,
+          gravity: 0.6,
+          scalar: 1.2,
+          drift: Math.cos(angle) * 0.5,
+        });
+      }
+    }, 500); // Explosion happens after 500ms
+
+    if (timeLeft > 0) {
+      requestAnimationFrame(launchFirework);
+    }
+  })();
 }
