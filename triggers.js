@@ -75,18 +75,35 @@ export const TRIGGER_CONFIG = {
     type: "behavior",
   },
 
-  SHOPPING_NEWS: {
-    id: "shopping_news",
-    name: "Shopping/News Browsing",
-    description: "Excessive shopping or news browsing",
+  SHOPPING_SITES: {
+    id: "shopping_sites",
+    name: "Shopping Sites",
+    description: "Browsing shopping websites during work",
     domains: [
-      "amazon.com",
+      "amazon",
       "flipkart.com",
       "ebay.com",
+      "walmart.com",
+      "etsy.com",
+      "aliexpress.com",
+      "bestbuy.com",
+      "target.com",
+    ],
+    type: "instant",
+  },
+
+  NEWS_SITES: {
+    id: "news_sites",
+    name: "News Browsing",
+    description: "Excessive news browsing",
+    domains: [
       "ndtv.com",
       "cnn.com",
       "bbc.com",
       "news.google.com",
+      "foxnews.com",
+      "reuters.com",
+      "bloomberg.com",
     ],
     visitThreshold: 5,
     type: "frequency",
