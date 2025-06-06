@@ -205,34 +205,61 @@ export class TriggerDetector {
     }
   }
 
-  // Helper function to match domains
+  // Helper function to check if domain matches any in the list
   domainMatches(domain, pattern) {
-    // Remove www. from both domain and pattern for comparison
-    const normalizedDomain = domain.toLowerCase();
-    const normalizedPattern = pattern.replace(/^www\./, "").toLowerCase();
-    return normalizedDomain.includes(normalizedPattern);
+    // Remove www. and normalize both domain and pattern
+    const normalizedDomain = domain.toLowerCase().replace(/^www\./, "");
+    const normalizedPattern = pattern.toLowerCase().replace(/^www\./, "");
+
+    // Check if the domain includes the pattern or vice versa
+    return (
+      normalizedDomain.includes(normalizedPattern) ||
+      normalizedPattern.includes(normalizedDomain)
+    );
   }
 
   // Check duration-based triggers
   checkDurationTriggers(domain, duration) {
-    console.log("Checking duration triggers:", { domain, duration });
+    console.log("🕒 Checking duration triggers:", {
+      domain,
+      duration: Math.floor(duration / 1000) + "s",
+      timestamp: new Date().toLocaleTimeString(),
+    });
+
+    // Get all duration and instant type triggers
     const triggers = Object.values(TRIGGER_CONFIG).filter(
       (t) =>
-        t.type === "duration" &&
-        t.domains.some((d) => this.domainMatches(domain, d))
+        (t.type === "duration" || t.type === "instant") &&
+        t.domains?.some((d) => this.domainMatches(domain, d))
     );
 
-    console.log("Found matching triggers:", triggers);
+    console.log(
+      "📍 Found matching triggers:",
+      triggers.map((t) => t.name)
+    );
 
     for (const trigger of triggers) {
-      console.log("Checking trigger:", {
-        trigger,
-        threshold: trigger.timeThreshold,
-        duration,
+      // For instant triggers, trigger immediately
+      if (trigger.type === "instant") {
+        console.log("⚡ Instant trigger activated:", trigger.name);
+        this.triggerDetected(trigger, { domain });
+        continue;
+      }
+
+      // For duration triggers, check threshold
+      console.log("⏱️ Checking duration trigger:", {
+        trigger: trigger.name,
+        threshold: Math.floor(trigger.timeThreshold / 1000) + "s",
+        currentDuration: Math.floor(duration / 1000) + "s",
       });
+
       if (duration >= trigger.timeThreshold) {
-        console.log("Trigger threshold met!");
-        this.triggerDetected(trigger, { duration });
+        console.log("🎯 Trigger threshold met for:", trigger.name);
+        this.triggerDetected(trigger, {
+          duration,
+          domain,
+          threshold: trigger.timeThreshold,
+        });
       }
     }
   }
@@ -367,12 +394,15 @@ export class TriggerDetector {
     const config = TRIGGER_CONFIG.FREQUENT_TYPING_DELETING;
     const now = Date.now();
 
-    // Initialize separate tracking for typing and deleting
+    // Initialize tracking arrays if they don't exist
     if (!this.typeDeleteHistory.has("typing")) {
       this.typeDeleteHistory.set("typing", []);
     }
     if (!this.typeDeleteHistory.has("deleting")) {
       this.typeDeleteHistory.set("deleting", []);
+    }
+    if (!this.typeDeleteHistory.has("patterns")) {
+      this.typeDeleteHistory.set("patterns", []);
     }
 
     // Determine if this is a delete action
@@ -399,12 +429,27 @@ export class TriggerDetector {
     this.typeDeleteHistory.set("typing", recentTyping);
     this.typeDeleteHistory.set("deleting", recentDeleting);
 
-    // Check if we've hit both thresholds
+    // Check if we've hit the thresholds for a single pattern
     if (
       recentTyping.length >= config.actionThreshold &&
       recentDeleting.length >= config.deleteThreshold
     ) {
-      // Calculate typing speed (actions per second)
+      // Get the patterns array and clean old patterns
+      const patterns = this.typeDeleteHistory
+        .get("patterns")
+        .filter((pattern) => now - pattern.timestamp < config.patternWindow);
+
+      // Add this pattern
+      patterns.push({
+        timestamp: now,
+        typingCount: recentTyping.length,
+        deletingCount: recentDeleting.length,
+      });
+
+      // Update patterns array
+      this.typeDeleteHistory.set("patterns", patterns);
+
+      // Calculate typing speed for this pattern
       const totalActions = recentTyping.length + recentDeleting.length;
       const timeSpan =
         (Math.max(...recentTyping, ...recentDeleting) -
@@ -412,19 +457,37 @@ export class TriggerDetector {
         1000;
       const actionsPerSecond = totalActions / timeSpan;
 
-      console.log("⌨️ Typing Pattern:", {
+      console.log("⌨️ Typing Pattern Detected:", {
+        patternCount: patterns.length,
+        requiredPatterns: config.patternRepetitions,
         typingCount: recentTyping.length,
         deletingCount: recentDeleting.length,
         timeWindow: config.timeWindow / 1000 + "s",
         actionsPerSecond: actionsPerSecond.toFixed(2),
       });
 
-      this.triggerDetected(config, {
-        typingCount: recentTyping.length,
-        deletingCount: recentDeleting.length,
-        actionsPerSecond: actionsPerSecond.toFixed(2),
-        timeWindow: config.timeWindow / 1000,
-      });
+      // Clear the current pattern's actions to prepare for next pattern
+      this.typeDeleteHistory.set("typing", []);
+      this.typeDeleteHistory.set("deleting", []);
+
+      // Check if we've seen enough patterns
+      if (patterns.length >= config.patternRepetitions) {
+        console.log("🎯 Multiple Erratic Typing Patterns Detected!", {
+          patternCount: patterns.length,
+          timeSpan: (now - patterns[0].timestamp) / 1000 + "s",
+        });
+
+        this.triggerDetected(config, {
+          patternCount: patterns.length,
+          totalTyping: patterns.reduce((sum, p) => sum + p.typingCount, 0),
+          totalDeleting: patterns.reduce((sum, p) => sum + p.deletingCount, 0),
+          timeSpan: (now - patterns[0].timestamp) / 1000,
+          actionsPerSecond: actionsPerSecond.toFixed(2),
+        });
+
+        // Clear patterns after triggering
+        this.typeDeleteHistory.set("patterns", []);
+      }
     }
   }
 

@@ -104,11 +104,14 @@ export const TRIGGER_CONFIG = {
   FREQUENT_TYPING_DELETING: {
     id: "frequent_typing_deleting",
     name: "Frequent Typing and Deleting",
-    description: "Erratic typing behavior",
-    actionThreshold: 10,
-    deleteThreshold: 5,
-    timeWindow: 10 * 1000,
-    cooldownPeriod: 60 * 1000,
+    description:
+      "Repeatedly typing and deleting - are you unsure about what to write?",
+    actionThreshold: 10, // 10 typing actions
+    deleteThreshold: 5, // 5 delete actions
+    patternRepetitions: 2, // Need to see the pattern repeat this many times
+    timeWindow: 10 * 1000, // 10 seconds for each pattern
+    patternWindow: 60 * 1000, // 1 minute to catch all repetitions
+    cooldownPeriod: 120 * 1000, // 2 minute cooldown after trigger
     type: "behavior",
   },
 
@@ -140,7 +143,7 @@ export const TRIGGER_CONFIG = {
       "reuters.com",
       "bloomberg.com",
     ],
-    timeThreshold: 10 * 60 * 1000, // 10 minutes in milliseconds
+    timeThreshold: 1 * 60 * 1000, // 10 minutes in milliseconds
     type: "duration",
   },
 
@@ -149,7 +152,7 @@ export const TRIGGER_CONFIG = {
     name: "Messaging Platforms",
     description: "Extended messaging platform use",
     domains: ["web.whatsapp.com", "discord.com", "slack.com", "telegram.org"],
-    timeThreshold: 10 * 60 * 1000, // 10 minutes in milliseconds
+    timeThreshold: 1 * 60 * 1000, // 10 minutes in milliseconds
     type: "duration",
   },
 
