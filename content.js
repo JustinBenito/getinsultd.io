@@ -731,3 +731,41 @@ window.addEventListener("beforeunload", () => {
     updateVisitData(true);
   }
 });
+
+// Create and append the confetti container
+const confettiContainer = document.createElement("div");
+confettiContainer.id = "confetti-container";
+confettiContainer.style.cssText = `
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 999999;
+`;
+document.body.appendChild(confettiContainer);
+
+// Function to add temporary border effect
+function showBorderEffect(duration = 3000) {
+  document.body.style.transition = "outline 0.3s ease-in-out";
+  document.body.style.outline = "3px solid #4CAF50";
+
+  setTimeout(() => {
+    document.body.style.outline = "none";
+  }, duration);
+}
+
+// Listen for messages from the background script
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === "SHOW_BORDER_EFFECT") {
+    showBorderEffect(message.duration);
+  }
+});
+
+// Check if productivity triggers are initialized
+chrome.runtime.sendMessage({ type: "GET_PRODUCTIVITY_STATUS" }, (response) => {
+  if (response && response.isInitialized) {
+    console.log("Productivity triggers are active");
+  }
+});

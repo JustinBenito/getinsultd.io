@@ -1,3 +1,5 @@
+import { productivityTriggers } from "./triggers.js";
+
 // Background script to handle tab events
 let lastTabTimestamp = Date.now();
 
@@ -270,3 +272,17 @@ async function checkTabs() {
     console.error("Error checking tabs in background:", error);
   }
 }
+
+// Initialize productivity triggers when the background script loads
+productivityTriggers.init();
+
+// Listen for messages from content scripts
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === "GET_PRODUCTIVITY_STATUS") {
+    // You can add any additional status information here
+    sendResponse({
+      isInitialized: true,
+      lastCheck: Date.now(),
+    });
+  }
+});

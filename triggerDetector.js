@@ -15,6 +15,8 @@ export class TriggerDetector {
     this.youtubeMonitoring = null;
     this.lastTabCount = 0;
     this.lastUrl = window.location.href;
+    this.productiveActionCount = 0;
+    this.hasFirstTabBeenChecked = false;
 
     console.log(
       "TriggerDetector initialized, start time:",
@@ -44,6 +46,12 @@ export class TriggerDetector {
 
     // Check initial URL
     this.checkForYouTubeShorts(window.location.href);
+
+    // Initialize distraction tracking
+    this.initializeDistractionTracking();
+
+    // Track current tab for proper closure detection
+    this.currentTab = null;
   }
 
   setupMessageListener() {
@@ -198,6 +206,39 @@ export class TriggerDetector {
       }
       this.lastActiveTime = now;
 
+      // Check for productive duration
+      if (
+        timeSinceLastActive >= TRIGGER_CONFIG.PRODUCTIVE_DURATION.timeThreshold
+      ) {
+        const productiveDurationTrigger = TRIGGER_CONFIG.PRODUCTIVE_DURATION;
+        if (
+          productiveDurationTrigger.domains.some((d) =>
+            this.domainMatches(currentDomain, d)
+          )
+        ) {
+          this.triggerDetected(productiveDurationTrigger, {
+            domain: currentDomain,
+            duration: timeSinceLastActive,
+          });
+        }
+      }
+
+      // Check for distraction-free period
+      const distractionFreeTrigger = TRIGGER_CONFIG.DISTRACTION_FREE;
+      if (timeSinceLastActive >= distractionFreeTrigger.timeThreshold) {
+        const hasVisitedDistractions = distractionFreeTrigger.domains.some(
+          (d) =>
+            this.tabHistory.has(d) &&
+            now - this.tabHistory.get(d) < distractionFreeTrigger.timeThreshold
+        );
+
+        if (!hasVisitedDistractions) {
+          this.triggerDetected(distractionFreeTrigger, {
+            duration: timeSinceLastActive,
+          });
+        }
+      }
+
       // Restart YouTube monitoring when tab becomes active
       if (currentDomain.includes("youtube.com")) {
         this.initializeYouTubeMonitoring();
@@ -286,19 +327,155 @@ export class TriggerDetector {
 
   // Handle tab activation
   async handleTabActivated(activeInfo) {
+    const tab = await this.getTabInfo(activeInfo.tabId);
+    if (!tab || !tab.url) return;
+
+    // Update current tab reference
+    this.currentTab = tab;
+
     try {
-      const tab = await chrome.tabs.get(activeInfo.tabId);
       const currentDomain = new URL(tab.url).hostname;
       const now = Date.now();
-      const timeSinceLastTab = now - this.lastTabTimestamp;
+      const state = this.getDistractionState();
 
-      console.log("Tab activated:", {
+      // Check if current site is a distraction
+      const isDistraction = this.isDistractionDomain(currentDomain);
+      console.log("Tab activated:", { currentDomain, isDistraction });
+
+      if (isDistraction) {
+        console.log("🚫 Distraction site visited:", currentDomain);
+        // Reset the distraction-free period
+        this.updateDistractionState({
+          distractionFreeStartTime: now,
+          lastDistractionTime: now,
+          isCurrentlyOnDistraction: true,
+        });
+      } else {
+        // If coming from a distraction site, reset the timer
+        if (state.isCurrentlyOnDistraction) {
+          this.updateDistractionState({
+            distractionFreeStartTime: now,
+            isCurrentlyOnDistraction: false,
+          });
+          return; // Don't check for streak yet, we just started
+        }
+
+        // If not a distraction site, check how long we've been distraction-free
+        const timeSinceLastDistraction = now - state.distractionFreeStartTime;
+
+        console.log(
+          "Time since last distraction (minutes):",
+          Math.floor(timeSinceLastDistraction / (1000 * 60))
+        );
+
+        // If it's been 10 minutes since last distraction
+        if (timeSinceLastDistraction >= 10 * 60 * 1000) {
+          // 10 minutes
+          const lastTriggerTime = state.lastTriggerTimes?.distraction_free || 0;
+          const timeSinceLastTrigger = now - lastTriggerTime;
+
+          // Only trigger if we haven't triggered in the last 10 minutes
+          if (timeSinceLastTrigger >= 10 * 60 * 1000) {
+            console.log("✨ Triggering distraction-free celebration");
+
+            this.updateDistractionState({
+              lastTriggerTimes: {
+                ...state.lastTriggerTimes,
+                distraction_free: now,
+              },
+            });
+
+            this.triggerDetected(TRIGGER_CONFIG.DISTRACTION_FREE, {
+              timeSinceLastDistraction: Math.floor(
+                timeSinceLastDistraction / (1000 * 60)
+              ),
+            });
+          }
+        }
+      }
+
+      // Check for morning productivity with strict conditions
+      const currentHour = new Date().getHours();
+      const morningSurgeTrigger = TRIGGER_CONFIG.MORNING_SURGE;
+
+      console.log("Morning Productivity Check:", {
+        currentHour,
         currentDomain,
-        timeSinceLastTab,
+        morningHourLimit: morningSurgeTrigger.morningHourLimit,
+        requiresMorningHours: morningSurgeTrigger.requiresMorningHours,
+        isProductiveDomain: morningSurgeTrigger.domains.some((d) =>
+          this.domainMatches(currentDomain, d)
+        ),
       });
 
-      this.checkRewardSwitching(currentDomain, timeSinceLastTab);
-      this.lastTabTimestamp = now;
+      // Only proceed with morning surge if ALL conditions are met
+      if (
+        morningSurgeTrigger.requiresMorningHours &&
+        currentHour < morningSurgeTrigger.morningHourLimit &&
+        morningSurgeTrigger.domains.some((d) =>
+          this.domainMatches(currentDomain, d)
+        )
+      ) {
+        console.log("✅ All morning productivity conditions met:", {
+          currentHour,
+          hourLimit: morningSurgeTrigger.morningHourLimit,
+          domain: currentDomain,
+        });
+        this.triggerDetected(morningSurgeTrigger, {
+          domain: currentDomain,
+          hour: currentHour,
+        });
+      } else {
+        console.log("❌ Morning productivity conditions not met:", {
+          isBeforeLimit: currentHour < morningSurgeTrigger.morningHourLimit,
+          requiresMorningHours: morningSurgeTrigger.requiresMorningHours,
+          isProductiveDomain: morningSurgeTrigger.domains.some((d) =>
+            this.domainMatches(currentDomain, d)
+          ),
+        });
+      }
+
+      // Check for productive website visit
+      const productiveWebsiteTrigger = TRIGGER_CONFIG.PRODUCTIVE_WEBSITE;
+      if (
+        productiveWebsiteTrigger.domains.some((d) =>
+          this.domainMatches(currentDomain, d)
+        )
+      ) {
+        this.triggerDetected(productiveWebsiteTrigger, {
+          domain: currentDomain,
+        });
+        this.incrementProductiveActions();
+      }
+
+      // Check for work document
+      const workDocTrigger = TRIGGER_CONFIG.WORK_DOCUMENT;
+      if (
+        workDocTrigger.domains.some((d) => this.domainMatches(currentDomain, d))
+      ) {
+        this.triggerDetected(workDocTrigger, { domain: currentDomain });
+        this.incrementProductiveActions();
+      }
+
+      // Check Google search
+      if (currentDomain.includes("google.com")) {
+        const searchParams = new URL(tab.url).searchParams;
+        const query = searchParams.get("q");
+        if (query) {
+          const productiveSearchTrigger = TRIGGER_CONFIG.PRODUCTIVE_SEARCH;
+          if (
+            productiveSearchTrigger.keywords.some((k) =>
+              query.toLowerCase().includes(k)
+            )
+          ) {
+            this.triggerDetected(productiveSearchTrigger, { query });
+            this.incrementProductiveActions();
+          }
+        }
+      }
+
+      // Continue with existing tab change logic
+      await this.checkRewardSwitching(currentDomain, timeSinceLastDistraction);
     } catch (error) {
       console.error("Error handling tab activation:", error);
     }
@@ -306,21 +483,34 @@ export class TriggerDetector {
 
   // Handle tab URL updates
   async handleTabUpdated(tabId, changeInfo, tab) {
-    if (changeInfo.status === "complete" && tab.active) {
-      try {
-        const currentDomain = new URL(tab.url).hostname;
-        const now = Date.now();
-        const timeSinceLastTab = now - this.lastTabTimestamp;
+    if (changeInfo.status === "complete" && tab.url) {
+      // Update current tab reference if it's the active tab
+      if (this.currentTab && this.currentTab.id === tabId) {
+        this.currentTab = tab;
 
-        console.log("Tab updated:", {
-          currentDomain,
-          timeSinceLastTab,
-        });
+        try {
+          const domain = new URL(tab.url).hostname;
+          const isDistraction = this.isDistractionDomain(domain);
+          const state = this.getDistractionState();
 
-        this.checkRewardSwitching(currentDomain, timeSinceLastTab);
-        this.lastTabTimestamp = now;
-      } catch (error) {
-        console.error("Error handling tab update:", error);
+          if (isDistraction && !state.isCurrentlyOnDistraction) {
+            console.log("🚫 Distraction site loaded:", domain);
+            // Reset the distraction-free period
+            this.updateDistractionState({
+              distractionFreeStartTime: Date.now(),
+              lastDistractionTime: Date.now(),
+              isCurrentlyOnDistraction: true,
+            });
+          } else if (!isDistraction && state.isCurrentlyOnDistraction) {
+            // Transitioning from distraction to non-distraction
+            this.updateDistractionState({
+              distractionFreeStartTime: Date.now(),
+              isCurrentlyOnDistraction: false,
+            });
+          }
+        } catch (error) {
+          console.error("Error checking updated tab URL:", error);
+        }
       }
     }
   }
@@ -493,42 +683,44 @@ export class TriggerDetector {
 
   // Check for non-educational YouTube content
   checkYouTubeContent() {
-    if (window.location.hostname.includes("youtube.com")) {
-      const config = TRIGGER_CONFIG.NON_EDUCATIONAL_YOUTUBE;
-      const title = document.title.toLowerCase();
-
-      const isEducational = config.educationalKeywords.some((keyword) =>
-        title.includes(keyword.toLowerCase())
-      );
-
-      if (!isEducational) {
-        this.triggerDetected(config, { title });
+    const videoTitle = document.querySelector(
+      "h1.ytd-video-primary-info-renderer"
+    )?.textContent;
+    if (videoTitle) {
+      const productiveYouTubeTrigger = TRIGGER_CONFIG.PRODUCTIVE_YOUTUBE;
+      if (
+        productiveYouTubeTrigger.keywords.some((k) =>
+          videoTitle.toLowerCase().includes(k)
+        )
+      ) {
+        this.triggerDetected(productiveYouTubeTrigger, { title: videoTitle });
+        this.incrementProductiveActions();
       }
     }
   }
 
   // Trigger detection handler
   triggerDetected(trigger, data) {
-    // Prevent duplicate triggers within a time window
-    const triggerId = trigger.id;
-    if (this.activeTriggers.has(triggerId)) return;
-
-    this.activeTriggers.add(triggerId);
-    this.notifyCallbacks(trigger, data);
-
-    // For YouTube Shorts specifically, clear the trigger when navigating away from shorts
-    if (triggerId === "youtube_shorts") {
-      // Clear trigger when navigating to a non-shorts URL
-      if (!window.location.href.includes("/shorts/")) {
-        this.activeTriggers.delete(triggerId);
-        return;
+    // Special validation for morning surge trigger
+    if (trigger.id === "morning_surge") {
+      const currentHour = new Date().getHours();
+      if (currentHour >= trigger.morningHourLimit) {
+        console.log(
+          "🚫 Blocked morning surge trigger outside morning hours:",
+          currentHour
+        );
+        return; // Don't trigger if not morning hours
       }
     }
 
-    // Clear trigger after delay (5 minutes cooldown for most triggers)
-    setTimeout(() => {
-      this.activeTriggers.delete(triggerId);
-    }, 5 * 60 * 1000); // 5 minutes cooldown
+    console.log(`🎯 Trigger detected: ${trigger.name}`, {
+      triggerId: trigger.id,
+      triggerData: data,
+      timestamp: new Date().toLocaleTimeString(),
+    });
+
+    // Notify all registered callbacks
+    this.notifyCallbacks(trigger, data);
   }
 
   // Cleanup old tracking data
@@ -562,6 +754,50 @@ export class TriggerDetector {
   }
 
   startPeriodicChecks() {
+    // Check every minute for distraction-free status
+    setInterval(() => {
+      if (!this.currentTab) return;
+
+      try {
+        const now = Date.now();
+        const state = this.getDistractionState();
+        const currentDomain = new URL(this.currentTab.url).hostname;
+
+        // Only check if current tab is not a distraction site
+        if (
+          !this.isDistractionDomain(currentDomain) &&
+          !state.isCurrentlyOnDistraction
+        ) {
+          const timeSinceLastDistraction = now - state.distractionFreeStartTime;
+
+          // If it's been 10 minutes since last distraction
+          if (timeSinceLastDistraction >= 10 * 60 * 1000) {
+            const lastTriggerTime =
+              state.lastTriggerTimes?.distraction_free || 0;
+            const timeSinceLastTrigger = now - lastTriggerTime;
+
+            // Only trigger if we haven't triggered in the last 10 minutes
+            if (timeSinceLastTrigger >= 10 * 60 * 1000) {
+              this.triggerDetected(TRIGGER_CONFIG.DISTRACTION_FREE, {
+                timeSinceLastDistraction: Math.floor(
+                  timeSinceLastDistraction / (1000 * 60)
+                ),
+              });
+
+              this.updateDistractionState({
+                lastTriggerTimes: {
+                  ...state.lastTriggerTimes,
+                  distraction_free: now,
+                },
+              });
+            }
+          }
+        }
+      } catch (error) {
+        console.error("Error in periodic check:", error);
+      }
+    }, 60000); // Check every minute
+
     // Check every 10 seconds for all duration-based triggers
     setInterval(() => {
       if (!document.hidden) {
@@ -654,5 +890,127 @@ export class TriggerDetector {
     } catch (error) {
       console.error("Error checking for YouTube Shorts:", error);
     }
+  }
+
+  incrementProductiveActions() {
+    this.productiveActionCount++;
+    const streakTrigger = TRIGGER_CONFIG.PRODUCTIVE_STREAK;
+    if (this.productiveActionCount >= streakTrigger.threshold) {
+      this.triggerDetected(streakTrigger, {
+        count: this.productiveActionCount,
+      });
+      if (streakTrigger.resetOnThreshold) {
+        this.productiveActionCount = 0;
+      }
+    }
+  }
+
+  // Add helper method for getting tab info
+  async getTabInfo(tabId) {
+    return new Promise((resolve) => {
+      if (!chrome || !chrome.tabs) {
+        resolve(null);
+        return;
+      }
+      chrome.tabs.get(tabId, (tab) => {
+        resolve(tab);
+      });
+    });
+  }
+
+  initializeDistractionTracking() {
+    // Initialize tracking state in session storage
+    const now = Date.now();
+    if (!sessionStorage.getItem("distractionState")) {
+      sessionStorage.setItem(
+        "distractionState",
+        JSON.stringify({
+          lastDistractionTime: now,
+          distractionFreeStartTime: now,
+          closedDistractions: [],
+          lastTriggerTimes: {},
+          isCurrentlyOnDistraction: false,
+        })
+      );
+    }
+  }
+
+  getDistractionState() {
+    return JSON.parse(sessionStorage.getItem("distractionState"));
+  }
+
+  updateDistractionState(updates) {
+    const currentState = this.getDistractionState();
+    const newState = { ...currentState, ...updates };
+    sessionStorage.setItem("distractionState", JSON.stringify(newState));
+    return newState;
+  }
+
+  async handleTabClose(tabId) {
+    // Only handle tab close if we have a record of the tab that's being closed
+    if (!this.currentTab || this.currentTab.id !== tabId) {
+      console.log("Tab close ignored - not current tab:", tabId);
+      return;
+    }
+
+    try {
+      const url = new URL(this.currentTab.url);
+      const domain = url.hostname;
+      const state = this.getDistractionState();
+
+      // Check if it's a distraction domain
+      if (this.isDistractionDomain(domain)) {
+        console.log("🎯 Checking distraction site closure:", domain);
+
+        // Only celebrate if:
+        // 1. We haven't celebrated this domain before
+        // 2. We're currently on a distraction site
+        // 3. Haven't triggered recently
+        if (
+          !state.closedDistractions.includes(domain) &&
+          state.isCurrentlyOnDistraction
+        ) {
+          console.log("✨ New distraction site closed:", domain);
+
+          // Update state
+          this.updateDistractionState({
+            closedDistractions: [...state.closedDistractions, domain],
+            lastTriggerTimes: {
+              ...state.lastTriggerTimes,
+              closed_distraction: Date.now(),
+            },
+          });
+
+          // Trigger the celebration
+          this.triggerDetected(TRIGGER_CONFIG.CLOSED_DISTRACTION, {
+            domain: domain,
+            timestamp: Date.now(),
+          });
+        } else {
+          console.log("Skipping distraction closure trigger:", {
+            alreadyCelebrated: state.closedDistractions.includes(domain),
+            isOnDistraction: state.isCurrentlyOnDistraction,
+          });
+        }
+      }
+    } catch (error) {
+      console.error("Error handling tab close:", error);
+    }
+
+    // Clear current tab reference
+    this.currentTab = null;
+  }
+
+  isDistractionDomain(domain) {
+    const distractionDomains = [
+      "instagram.com",
+      "twitter.com",
+      "netflix.com",
+      "facebook.com",
+      "tiktok.com",
+      "reddit.com",
+    ];
+
+    return distractionDomains.some((d) => domain.includes(d));
   }
 }
